@@ -1,0 +1,368 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+labels:
+  app: cakephp-mysql-example-cn
+  template: cakephp-mysql-example-cn
+message: |-
+  在您的项目内已经创建了以下服务:  ${NAME}, ${DATABASE_SERVICE_NAME}。
+
+  访问 https://github.com/openshift/cake-ex/blob/master/README.md 可以查看更多使用此模板的信息。
+metadata:
+  annotations:
+    description: |-
+      使用 MySQL 数据库的 CakePHP 应用的例子。需要了解更多使用此模板的信息，访问
+      https://github.com/openshift/cakephp-ex/blob/master/README.md。
+
+      警告：此模板只供测试使用。保存的数据会随着容器组的终止而消失。
+    iconClass: icon-php
+    openshift.io/display-name: CakePHP + MySQL (非持久化)
+    openshift.io/documentation-url: https://github.com/openshift/cakephp-ex
+    openshift.io/long-description: 这个模板定义开发一个 CakePHP 应用需要的资源，包括一个构建配置，应用部署配置和数据库部署配置。
+      数据库存储在非持久存储中，因此此配置仅用于实验目的。
+    openshift.io/provider-display-name: Red Hat, Inc.
+    openshift.io/support-url: https://access.redhat.com
+    tags: quickstart,php,cakephp
+    template.openshift.io/bindable: "false"
+  creationTimestamp: 2017-12-14T05:13:01Z
+  name: cakephp-mysql-example-cn
+  namespace: openshift
+  resourceVersion: "36721162"
+  selfLink: /apis/template.openshift.io/v1/namespaces/openshift/templates/cakephp-mysql-example
+  uid: 74a75404-e08d-11e7-af1d-005056aae8a2
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: ${NAME}
+  stringData:
+    cakephp-secret-token: ${CAKEPHP_SECRET_TOKEN}
+    cakephp-security-cipher-seed: ${CAKEPHP_SECURITY_CIPHER_SEED}
+    cakephp-security-salt: ${CAKEPHP_SECURITY_SALT}
+    database-password: ${DATABASE_PASSWORD}
+    database-user: ${DATABASE_USER}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开和负载均衡应用容器组
+      service.alpha.openshift.io/dependencies: '[{"name": "${DATABASE_SERVICE_NAME}",
+        "kind": "Service"}]'
+    name: ${NAME}
+  spec:
+    ports:
+    - name: web
+      port: 8080
+      targetPort: 8080
+    selector:
+      name: ${NAME}
+- apiVersion: v1
+  kind: Route
+  metadata:
+    name: ${NAME}
+  spec:
+    host: ${APPLICATION_DOMAIN}
+    to:
+      kind: Service
+      name: ${NAME}
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      description: 跟踪应用镜像的变化
+    name: ${NAME}
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: 定义如何构建应用
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${NAME}
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${NAME}:latest
+    postCommit:
+      script: ./lib/Cake/Console/cake test app AllTests
+    source:
+      contextDir: ${CONTEXT_DIR}
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      type: Git
+    strategy:
+      sourceStrategy:
+        env:
+        - name: COMPOSER_MIRROR
+          value: ${COMPOSER_MIRROR}
+        from:
+          kind: ImageStreamTag
+          name: php:7.0
+          namespace: ${NAMESPACE}
+      type: Source
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - github:
+        secret: ${GITHUB_WEBHOOK_SECRET}
+      type: GitHub
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署应用服务
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}
+    strategy:
+      recreateParams:
+        pre:
+          execNewPod:
+            command:
+            - ./migrate-database.sh
+            containerName: cakephp-mysql-example
+          failurePolicy: Retry
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: ${NAME}
+        name: ${NAME}
+      spec:
+        containers:
+        - env:
+          - name: DATABASE_SERVICE_NAME
+            value: ${DATABASE_SERVICE_NAME}
+          - name: DATABASE_ENGINE
+            value: ${DATABASE_ENGINE}
+          - name: DATABASE_NAME
+            value: ${DATABASE_NAME}
+          - name: DATABASE_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}
+          - name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}
+          - name: CAKEPHP_SECRET_TOKEN
+            valueFrom:
+              secretKeyRef:
+                key: cakephp-secret-token
+                name: ${NAME}
+          - name: CAKEPHP_SECURITY_SALT
+            valueFrom:
+              secretKeyRef:
+                key: cakephp-security-salt
+                name: ${NAME}
+          - name: CAKEPHP_SECURITY_CIPHER_SEED
+            valueFrom:
+              secretKeyRef:
+                key: cakephp-security-cipher-seed
+                name: ${NAME}
+          - name: OPCACHE_REVALIDATE_FREQ
+            value: ${OPCACHE_REVALIDATE_FREQ}
+          image: ' '
+          livenessProbe:
+            httpGet:
+              path: /health.php
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 3
+          name: cakephp-mysql-example-cn
+          ports:
+          - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health.php
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 60
+            timeoutSeconds: 3
+          resources:
+            limits:
+              memory: ${MEMORY_LIMIT}
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - cakephp-mysql-example-cn
+        from:
+          kind: ImageStreamTag
+          name: ${NAME}:latest
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开数据库服务
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+    selector:
+      name: ${DATABASE_SERVICE_NAME}
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署数据库
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${DATABASE_SERVICE_NAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: ${DATABASE_SERVICE_NAME}
+        name: ${DATABASE_SERVICE_NAME}
+      spec:
+        containers:
+        - env:
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}
+          - name: MYSQL_DATABASE
+            value: ${DATABASE_NAME}
+          image: ' '
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 3306
+            timeoutSeconds: 1
+          name: mysql
+          ports:
+          - containerPort: 3306
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - MYSQL_PWD='${DATABASE_PASSWORD}' mysql -h 127.0.0.1 -u ${DATABASE_USER}
+                -D ${DATABASE_NAME} -e 'SELECT 1'
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: ${MEMORY_MYSQL_LIMIT}
+          volumeMounts:
+          - mountPath: /var/lib/mysql/data
+            name: data
+        volumes:
+        - emptyDir: {}
+          name: data
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - mysql
+        from:
+          kind: ImageStreamTag
+          name: mysql:5.7
+          namespace: ${NAMESPACE}
+      type: ImageChange
+    - type: ConfigChange
+parameters:
+- description: 分配到项目内定义的所有前端对象的名称。
+  displayName: 名称
+  name: NAME
+  required: true
+  value: cakephp-mysql-example-cn
+- description: ImageStream 所在的 Namespace。
+  displayName: Namespace
+  name: NAMESPACE
+  required: true
+  value: openshift
+- description: CakePHP 容器可以使用的最大内存数。
+  displayName: 内存限制
+  name: MEMORY_LIMIT
+  required: true
+  value: 512Mi
+- description: MySQL 容器可以使用的最大内存数。
+  displayName: 内存限制 (MySQL)
+  name: MEMORY_MYSQL_LIMIT
+  required: true
+  value: 512Mi
+- description: 你的应用源代码的仓库地址（git）
+  displayName: 代码仓库地址（git）
+  name: SOURCE_REPOSITORY_URL
+  required: true
+  value: https://github.com/openshift/cakephp-ex.git
+- description: 代码分支名称，标签等。
+  displayName: Git 引用
+  name: SOURCE_REPOSITORY_REF
+- description: 项目内的相对文件路径。
+  displayName: 内容目录
+  name: CONTEXT_DIR
+- description: 公开的主机名，用于路由到 Dancer 服务，留空将设置为默认值。
+  displayName: 应用主机名
+  name: APPLICATION_DOMAIN
+- description: Github 触发秘钥, 复杂的字符串作为 webhook URL 的一部分，非加密。
+  displayName: GitHub Webhook 秘钥
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GITHUB_WEBHOOK_SECRET
+- displayName: 数据库服务名
+  name: DATABASE_SERVICE_NAME
+  required: true
+  value: mysql
+- description: '数据库 engine: postgresql, mysql 或者 sqlite (默认).'
+  displayName: 数据库 Engine
+  name: DATABASE_ENGINE
+  required: true
+  value: mysql
+- displayName: 数据库名
+  name: DATABASE_NAME
+  required: true
+  value: default
+- displayName: 数据库用户名
+  name: DATABASE_USER
+  required: true
+  value: cakephp
+- displayName: 数据库密码
+  from: '[a-zA-Z0-9]{16}'
+  generate: expression
+  name: DATABASE_PASSWORD
+- description: 设置一个长的随机字符串
+  displayName: CakePHP 安全 token
+  from: '[\w]{50}'
+  generate: expression
+  name: CAKEPHP_SECRET_TOKEN
+- description: 会话哈希的 Security saltsalt。
+  displayName: CakePHP Security Salt
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: CAKEPHP_SECURITY_SALT
+- description: 会话哈希的 Security cipher seed.
+  displayName: CakePHP Security Cipher Seed
+  from: '[0-9]{30}'
+  generate: expression
+  name: CAKEPHP_SECURITY_CIPHER_SEED
+- description: 为了更新，检查脚本时间戳的频率，按秒设置。0 将设置每个请求进行 OPchache 检查更新。
+  displayName: OPcache 重新生效频率
+  name: OPCACHE_REVALIDATE_FREQ
+  value: "2"
+- description: 自定义的 Composer 镜像地址（URL）
+  displayName: 自定义的 Composer 镜像地址
+  name: COMPOSER_MIRROR

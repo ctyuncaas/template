@@ -1,0 +1,340 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+labels:
+  app: nodejs-mongodb-example
+  template: nodejs-mongodb-example-cn
+message: |-
+  在您的项目内已经创建了以下服务: ${NAME}, ${DATABASE_SERVICE_NAME}。
+
+  访问 https://github.com/openshift/nodejs-ex/blob/master/README.md 可以查看更多使用此模板的信息。
+metadata:
+  annotations:
+    description: |-
+      关于 Node.js 应用使用 MongoDB 数据库的示例。访问 https://github.com/openshift/nodejs-ex/blob/master/README.md
+      可以查看更多使用此模板的信息。
+
+      警告：此目标只供测试使用。保存的数据会随着容器组的终止而消失。
+    iconClass: icon-nodejs
+    openshift.io/display-name: Node.js + MongoDB (非持久化)
+    openshift.io/documentation-url: https://github.com/openshift/nodejs-ex
+    openshift.io/long-description: 这个模板定义开发一个 NodeJS 应用需要的资源，包括一个构建配置，应用部署配置和数据库部署配置。
+      数据库存储在非持久存储中，因此此配置仅用于实验目的。
+    openshift.io/provider-display-name: Red Hat, Inc.
+    openshift.io/support-url: https://access.redhat.com
+    tags: quickstart,nodejs
+    template.openshift.io/bindable: "false"
+  creationTimestamp: 2017-12-14T05:13:01Z
+  name: nodejs-mongodb-example-cn
+  namespace: openshift
+  resourceVersion: "36690449"
+  selfLink: /apis/template.openshift.io/v1/namespaces/openshift/templates/nodejs-mongodb-example-cn
+  uid: 74b63058-e08d-11e7-af1d-005056aae8a2
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: ${NAME}
+  stringData:
+    database-admin-password: ${DATABASE_ADMIN_PASSWORD}
+    database-password: ${DATABASE_PASSWORD}
+    database-user: ${DATABASE_USER}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开和负载均衡应用容器组
+      service.alpha.openshift.io/dependencies: '[{"name": "${DATABASE_SERVICE_NAME}",
+        "kind": "Service"}]'
+    name: ${NAME}
+  spec:
+    ports:
+    - name: web
+      port: 8080
+      targetPort: 8080
+    selector:
+      name: ${NAME}
+- apiVersion: v1
+  kind: Route
+  metadata:
+    name: ${NAME}
+  spec:
+    host: ${APPLICATION_DOMAIN}
+    to:
+      kind: Service
+      name: ${NAME}
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      description: 跟踪应用镜像的变化
+    name: ${NAME}
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: 定义如何构建应用
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${NAME}
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${NAME}:latest
+    postCommit:
+      script: npm test
+    source:
+      contextDir: ${CONTEXT_DIR}
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      type: Git
+    strategy:
+      sourceStrategy:
+        env:
+        - name: NPM_MIRROR
+          value: ${NPM_MIRROR}
+        from:
+          kind: ImageStreamTag
+          name: nodejs:6
+          namespace: ${NAMESPACE}
+      type: Source
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - github:
+        secret: ${GITHUB_WEBHOOK_SECRET}
+      type: GitHub
+    - generic:
+        secret: ${GENERIC_WEBHOOK_SECRET}
+      type: Generic
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署应用服务
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: ${NAME}
+        name: ${NAME}
+      spec:
+        containers:
+        - env:
+          - name: DATABASE_SERVICE_NAME
+            value: ${DATABASE_SERVICE_NAME}
+          - name: MONGODB_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}
+          - name: MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}
+          - name: MONGODB_DATABASE
+            value: ${DATABASE_NAME}
+          - name: MONGODB_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-admin-password
+                name: ${NAME}
+          image: ' '
+          livenessProbe:
+            httpGet:
+              path: /pagecount
+              port: 8080
+            initialDelaySeconds: 30
+            timeoutSeconds: 3
+          name: nodejs-mongodb-example-cn
+          ports:
+          - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /pagecount
+              port: 8080
+            initialDelaySeconds: 3
+            timeoutSeconds: 3
+          resources:
+            limits:
+              memory: ${MEMORY_LIMIT}
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - nodejs-mongodb-example-cn
+        from:
+          kind: ImageStreamTag
+          name: ${NAME}:latest
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开数据库服务
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    ports:
+    - name: mongodb
+      port: 27017
+      targetPort: 27017
+    selector:
+      name: ${DATABASE_SERVICE_NAME}
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署数据库
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${DATABASE_SERVICE_NAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: ${DATABASE_SERVICE_NAME}
+        name: ${DATABASE_SERVICE_NAME}
+      spec:
+        containers:
+        - env:
+          - name: MONGODB_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}
+          - name: MONGODB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}
+          - name: MONGODB_DATABASE
+            value: ${DATABASE_NAME}
+          - name: MONGODB_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-admin-password
+                name: ${NAME}
+          image: ' '
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 27017
+            timeoutSeconds: 1
+          name: mongodb
+          ports:
+          - containerPort: 27017
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - mongo 127.0.0.1:27017/$MONGODB_DATABASE -u $MONGODB_USER -p $MONGODB_PASSWORD
+                --eval="quit()"
+            initialDelaySeconds: 3
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: ${MEMORY_MONGODB_LIMIT}
+          volumeMounts:
+          - mountPath: /var/lib/mongodb/data
+            name: ${DATABASE_SERVICE_NAME}-data
+        volumes:
+        - emptyDir:
+            medium: ""
+          name: ${DATABASE_SERVICE_NAME}-data
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - mongodb
+        from:
+          kind: ImageStreamTag
+          name: mongodb:3.2
+          namespace: ${NAMESPACE}
+      type: ImageChange
+    - type: ConfigChange
+parameters:
+- description: 分配到项目内定义的所有前端对象的名称。
+  displayName: 名称
+  name: NAME
+  required: true
+  value: nodejs-mongodb-example-cn
+- description: ImageStream 所在的 Namespace。
+  displayName: Namespace
+  name: NAMESPACE
+  required: true
+  value: openshift
+- description: Node.js 容器可以使用的最大内存数。
+  displayName: 内存限制
+  name: MEMORY_LIMIT
+  required: true
+  value: 512Mi
+- description: MongoDB 容器可以使用的最大内存数。
+  displayName: 内存限制 (MongoDB)
+  name: MEMORY_MONGODB_LIMIT
+  required: true
+  value: 512Mi
+- description: 你的应用源代码的仓库地址（git）
+  displayName: 代码仓库地址（git）
+  name: SOURCE_REPOSITORY_URL
+  required: true
+  value: https://github.com/openshift/nodejs-ex.git
+- description: 代码分支名称，标签等。
+  displayName: Git 引用
+  name: SOURCE_REPOSITORY_REF
+- description: 项目内的相对文件路径。
+  displayName: 内容目录
+  name: CONTEXT_DIR
+- description: 公开的主机名，用于路由到 Node.js 服务，留空将设置为默认值。
+  displayName: 应用主机名
+  name: APPLICATION_DOMAIN
+- description: Github 触发秘钥, 复杂的字符串作为 webhook URL 的一部分，非加密。
+  displayName: GitHub Webhook 秘钥
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GITHUB_WEBHOOK_SECRET
+- description: 配置通用 webhook 的秘钥字符串
+  displayName: 通用 Webhook 秘钥
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GENERIC_WEBHOOK_SECRET
+- displayName: 数据库服务名称
+  name: DATABASE_SERVICE_NAME
+  required: true
+  value: mongodb
+- description: 访问 MongoDB 数据库的用户名。
+  displayName: MongoDB 用户名
+  from: user[A-Z0-9]{3}
+  generate: expression
+  name: DATABASE_USER
+- description: MongoDB 用户密码。
+  displayName: MongoDB 密码
+  from: '[a-zA-Z0-9]{16}'
+  generate: expression
+  name: DATABASE_PASSWORD
+- displayName: 数据库名
+  name: DATABASE_NAME
+  required: true
+  value: sampledb
+- description: 数据库管理员用户密码。
+  displayName: 数据库管理员密码
+  from: '[a-zA-Z0-9]{16}'
+  generate: expression
+  name: DATABASE_ADMIN_PASSWORD
+- description: The custom NPM mirror URL
+  displayName: Custom NPM Mirror URL
+  name: NPM_MIRROR

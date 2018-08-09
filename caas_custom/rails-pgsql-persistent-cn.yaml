@@ -1,0 +1,393 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+labels:
+  app: rails-pgsql-persistent-cn
+  template: rails-pgsql-persistent-cn
+message: |-
+  在您的项目内已经创建了以下服务: ${NAME}, ${DATABASE_SERVICE_NAME}。
+
+  访问 https://github.com/openshift/rails-ex/blob/master/README.md 可以查看更多使用此模板的信息。
+metadata:
+  annotations:
+    description: 使用 PostgreSQl 数据库的 Rails 应用的例子。需要了解更多使用此模板的信息，访问
+      https://github.com/openshift/rails-ex/blob/master/README.md。
+    iconClass: icon-ruby
+    openshift.io/display-name: Rails + PostgreSQL (持久化)
+    openshift.io/documentation-url: https://github.com/openshift/rails-ex
+    openshift.io/long-description: 这个模板定义开发一个 Rails 应用需要的资源，包括一个构建配置，应用部署配置和数据库部署配置。
+    openshift.io/provider-display-name: Red Hat, Inc.
+    openshift.io/support-url: https://access.redhat.com
+    tags: quickstart,ruby,rails
+    template.openshift.io/bindable: "false"
+  creationTimestamp: 2017-12-14T05:13:01Z
+  name: rails-pgsql-persistent-cn
+  namespace: openshift
+  resourceVersion: "39877364"
+  selfLink: /apis/template.openshift.io/v1/namespaces/openshift/templates/rails-pgsql-persistent-cn
+  uid: 74b8c051-e08d-11e7-af1d-005056aae8a2
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: ${NAME}
+  stringData:
+    application-password: ${APPLICATION_PASSWORD}
+    application-user: ${APPLICATION_USER}
+    database-password: ${DATABASE_PASSWORD}
+    database-user: ${DATABASE_USER}
+    keybase: ${SECRET_KEY_BASE}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开和负载均衡应用容器组
+      service.alpha.openshift.io/dependencies: '[{"name": "${DATABASE_SERVICE_NAME}",
+        "kind": "Service"}]'
+    name: ${NAME}
+  spec:
+    ports:
+    - name: web
+      port: 8080
+      targetPort: 8080
+    selector:
+      name: ${NAME}
+- apiVersion: v1
+  kind: Route
+  metadata:
+    name: ${NAME}
+  spec:
+    host: ${APPLICATION_DOMAIN}
+    to:
+      kind: Service
+      name: ${NAME}
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      description: 跟踪应用镜像的变化
+    name: ${NAME}
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: 定义如何构建应用
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${NAME}
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${NAME}:latest
+    postCommit:
+      script: bundle exec rake test
+    source:
+      contextDir: ${CONTEXT_DIR}
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      type: Git
+    strategy:
+      sourceStrategy:
+        env:
+        - name: RUBYGEM_MIRROR
+          value: ${RUBYGEM_MIRROR}
+        from:
+          kind: ImageStreamTag
+          name: ruby:2.3
+          namespace: ${NAMESPACE}
+      type: Source
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - github:
+        secret: ${GITHUB_WEBHOOK_SECRET}
+      type: GitHub
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署应用服务
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}
+    strategy:
+      recreateParams:
+        pre:
+          execNewPod:
+            command:
+            - ./migrate-database.sh
+            containerName: ${NAME}
+          failurePolicy: Abort
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: ${NAME}
+        name: ${NAME}
+      spec:
+        containers:
+        - env:
+          - name: DATABASE_SERVICE_NAME
+            value: ${DATABASE_SERVICE_NAME}
+          - name: POSTGRESQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}
+          - name: POSTGRESQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}
+          - name: SECRET_KEY_BASE
+            valueFrom:
+              secretKeyRef:
+                key: keybase
+                name: ${NAME}
+          - name: POSTGRESQL_DATABASE
+            value: ${DATABASE_NAME}
+          - name: POSTGRESQL_MAX_CONNECTIONS
+            value: ${POSTGRESQL_MAX_CONNECTIONS}
+          - name: POSTGRESQL_SHARED_BUFFERS
+            value: ${POSTGRESQL_SHARED_BUFFERS}
+          - name: APPLICATION_DOMAIN
+            value: ${APPLICATION_DOMAIN}
+          - name: APPLICATION_USER
+            valueFrom:
+              secretKeyRef:
+                key: application-user
+                name: ${NAME}
+          - name: APPLICATION_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: application-password
+                name: ${NAME}
+          - name: RAILS_ENV
+            value: ${RAILS_ENV}
+          image: ' '
+          livenessProbe:
+            httpGet:
+              path: /articles
+              port: 8080
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+          name: ${NAME}
+          ports:
+          - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /articles
+              port: 8080
+            initialDelaySeconds: 5
+            timeoutSeconds: 3
+          resources:
+            limits:
+              memory: ${MEMORY_LIMIT}
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${NAME}
+        from:
+          kind: ImageStreamTag
+          name: ${NAME}:latest
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${VOLUME_CAPACITY}
+    storageClassName: ${STORAGECLASS_NAME}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开数据库服务
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+    selector:
+      name: ${DATABASE_SERVICE_NAME}
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署数据库
+      template.alpha.openshift.io/wait-for-ready: "true"
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${DATABASE_SERVICE_NAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: ${DATABASE_SERVICE_NAME}
+        name: ${DATABASE_SERVICE_NAME}
+      spec:
+        containers:
+        - env:
+          - name: POSTGRESQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}
+          - name: POSTGRESQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}
+          - name: POSTGRESQL_DATABASE
+            value: ${DATABASE_NAME}
+          - name: POSTGRESQL_MAX_CONNECTIONS
+            value: ${POSTGRESQL_MAX_CONNECTIONS}
+          - name: POSTGRESQL_SHARED_BUFFERS
+            value: ${POSTGRESQL_SHARED_BUFFERS}
+          image: ' '
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 5432
+            timeoutSeconds: 1
+          name: postgresql
+          ports:
+          - containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - psql -h 127.0.0.1 -U ${POSTGRESQL_USER} -q -d ${POSTGRESQL_DATABASE}
+                -c 'SELECT 1'
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: ${MEMORY_POSTGRESQL_LIMIT}
+          volumeMounts:
+          - mountPath: /var/lib/pgsql/data
+            name: ${DATABASE_SERVICE_NAME}-data
+        volumes:
+        - name: ${DATABASE_SERVICE_NAME}-data
+          persistentVolumeClaim:
+            claimName: ${DATABASE_SERVICE_NAME}
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - postgresql
+        from:
+          kind: ImageStreamTag
+          name: postgresql:9.5
+          namespace: ${NAMESPACE}
+      type: ImageChange
+    - type: ConfigChange
+parameters:
+- description: 分配到项目内定义的所有前端对象的名称。
+  displayName: 名称
+  name: NAME
+  required: true
+  value: rails-pgsql-persistent-cn
+- description: ImageStream 所在的 Namespace。
+  displayName: Namespace
+  name: NAMESPACE
+  required: true
+  value: openshift
+- description: Rails 容器可以使用的最大内存数。
+  displayName: 内存限制
+  name: MEMORY_LIMIT
+  required: true
+  value: 512Mi
+- description: PostgreSQL 容器可以使用的最大内存数。
+  displayName: 内存限制 (PostgreSQL)
+  name: MEMORY_POSTGRESQL_LIMIT
+  required: true
+  value: 512Mi
+- description: 数据卷的容量，例如 512Mi, 2Gi。
+  displayName: 数据卷容量
+  name: VOLUME_CAPACITY
+  required: true
+  value: 1Gi
+- description: 你的应用源代码的仓库地址（git）
+  displayName: 代码仓库地址（git）
+  name: SOURCE_REPOSITORY_URL
+  required: true
+  value: https://github.com/openshift/rails-ex.git
+- description: 代码分支名称，标签等。
+  displayName: Git 引用
+  name: SOURCE_REPOSITORY_REF
+- description: 项目内的相对文件路径。
+  displayName: 内容目录
+  name: CONTEXT_DIR
+- description: 公开的主机名，用于路由到 Dancer 服务，留空将设置为默认值。
+  displayName: 应用主机名
+  name: APPLICATION_DOMAIN
+- description: Github 触发秘钥, 复杂的字符串作为 webhook URL 的一部分，非加密。
+  displayName: GitHub Webhook 秘钥
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GITHUB_WEBHOOK_SECRET
+- description: 用于验证签名 cookies 的完整性的秘钥。
+  displayName: 秘钥
+  from: '[a-z0-9]{127}'
+  generate: expression
+  name: SECRET_KEY_BASE
+- description: 可以有权访问应用的用户。
+  displayName: 应用用户
+  name: APPLICATION_USER
+  required: true
+  value: openshift
+- description: 访问应用的用户密码。
+  displayName: 应用密码
+  name: APPLICATION_PASSWORD
+  required: true
+  value: secret
+- description: 示例应用运行环境，可以设置为 production, development 或者 test。
+  displayName: Rails 环境
+  name: RAILS_ENV
+  required: true
+  value: production
+- displayName: 数据库服务名
+  name: DATABASE_SERVICE_NAME
+  required: true
+  value: postgresql
+- displayName: 数据库用户名
+  from: user[A-Z0-9]{3}
+  generate: expression
+  name: DATABASE_USER
+- displayName: 数据库密码
+  from: '[a-zA-Z0-9]{8}'
+  generate: expression
+  name: DATABASE_PASSWORD
+- displayName: 数据库名
+  name: DATABASE_NAME
+  required: true
+  value: root
+- displayName: 最大数据库连接数
+  name: POSTGRESQL_MAX_CONNECTIONS
+  value: "100"
+- displayName: Shared Buffer Amount
+  name: POSTGRESQL_SHARED_BUFFERS
+  value: 12MB
+- description: 自定义的 RubyGems 镜像地址（URL）
+  displayName: 自定义的 RubyGems 镜像 URL
+  name: RUBYGEM_MIRROR
+- description: 创建 PVC 的 Storageclass。
+  displayName: Storageclass 名称
+  name: STORAGECLASS_NAME
+  value: gluster-dyn-customer

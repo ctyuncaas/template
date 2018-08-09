@@ -1,0 +1,366 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+labels:
+  template: dotnet-pgsql-persistent-cn
+message: |-
+  在您的项目内已经创建了以下服务: ${NAME}, ${DATABASE_SERVICE_NAME}。
+
+  访问 https://github.com/redhat-developer/s2i-dotnetcore 可以查看更多使用此模板的信息。
+metadata:
+  annotations:
+    description:
+      使用 PostgreSQL 数据库的 .NET Core 应用的示例，访问 https://github.com/redhat-developer/s2i-dotnetcore
+      可以查看更多使用此模板的信息。
+    iconClass: icon-dotnet
+    openshift.io/display-name: .NET Core + PostgreSQL (持久化)
+    tags: quickstart,dotnet
+    template.openshift.io/documentation-url: https://github.com/redhat-developer/s2i-dotnetcore
+    template.openshift.io/provider-display-name: Red Hat, Inc.
+    template.openshift.io/support-url: https://access.redhat.com
+  creationTimestamp: 2017-12-14T05:13:01Z
+  name: dotnet-pgsql-persistent-cn
+  namespace: openshift
+  resourceVersion: "39873648"
+  selfLink: /apis/template.openshift.io/v1/namespaces/openshift/templates/dotnet-pgsql-persistent-cn
+  uid: 74aeaff2-e08d-11e7-af1d-005056aae8a2
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: ${NAME}
+  stringData:
+    connect-string: Host=${DATABASE_SERVICE_NAME};Database=${DATABASE_NAME};Username=${DATABASE_USER};Password=${DATABASE_PASSWORD}
+    database-password: ${DATABASE_PASSWORD}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开和负载均衡应用容器组
+      service.alpha.openshift.io/dependencies: '[{"name": "${DATABASE_SERVICE_NAME}",
+        "kind": "Service"}]'
+    name: ${NAME}
+  spec:
+    ports:
+    - name: web
+      port: 8080
+      targetPort: 8080
+    selector:
+      name: ${NAME}
+- apiVersion: v1
+  kind: Route
+  metadata:
+    name: ${NAME}
+  spec:
+    host: ${APPLICATION_DOMAIN}
+    to:
+      kind: Service
+      name: ${NAME}
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      description: 跟踪应用镜像的变化
+    name: ${NAME}
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: 定义如何构建应用
+    name: ${NAME}
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${NAME}:latest
+    postCommit: {}
+    source:
+      contextDir: ${CONTEXT_DIR}
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      type: Git
+    strategy:
+      sourceStrategy:
+        env:
+        - name: DOTNET_STARTUP_PROJECT
+          value: ${DOTNET_STARTUP_PROJECT}
+        - name: DOTNET_ASSEMBLY_NAME
+          value: ${DOTNET_ASSEMBLY_NAME}
+        - name: DOTNET_NPM_TOOLS
+          value: ${DOTNET_NPM_TOOLS}
+        - name: DOTNET_TEST_PROJECTS
+          value: ${DOTNET_TEST_PROJECTS}
+        - name: DOTNET_CONFIGURATION
+          value: ${DOTNET_CONFIGURATION}
+        - name: DOTNET_PUBLISH
+          value: "true"
+        - name: DOTNET_RESTORE_SOURCES
+          value: ${DOTNET_RESTORE_SOURCES}
+        from:
+          kind: ImageStreamTag
+          name: ${DOTNET_IMAGE_STREAM_TAG}
+          namespace: ${NAMESPACE}
+      type: Source
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - github:
+        secret: ${GITHUB_WEBHOOK_SECRET}
+      type: GitHub
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署应用服务
+    name: ${NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}
+    strategy:
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          name: ${NAME}
+        name: ${NAME}
+      spec:
+        containers:
+        - env:
+          - name: ConnectionString
+            valueFrom:
+              secretKeyRef:
+                key: connect-string
+                name: ${NAME}
+          image: ' '
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 40
+            timeoutSeconds: 10
+          name: dotnet-pgsql-persistent-cn
+          ports:
+          - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 10
+            timeoutSeconds: 30
+          resources:
+            limits:
+              memory: ${MEMORY_LIMIT}
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - dotnet-pgsql-persistent-cn
+        from:
+          kind: ImageStreamTag
+          name: ${NAME}:latest
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${VOLUME_CAPACITY}
+    storageClassName: ${STORAGECLASS_NAME}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开数据库服务
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+    selector:
+      name: ${DATABASE_SERVICE_NAME}
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署数据库
+    name: ${DATABASE_SERVICE_NAME}
+  spec:
+    replicas: 1
+    selector:
+      name: ${DATABASE_SERVICE_NAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: ${DATABASE_SERVICE_NAME}
+        name: ${DATABASE_SERVICE_NAME}
+      spec:
+        containers:
+        - env:
+          - name: POSTGRESQL_USER
+            value: ${DATABASE_USER}
+          - name: POSTGRESQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}
+          - name: POSTGRESQL_DATABASE
+            value: ${DATABASE_NAME}
+          - name: POSTGRESQL_MAX_CONNECTIONS
+            value: ${POSTGRESQL_MAX_CONNECTIONS}
+          - name: POSTGRESQL_SHARED_BUFFERS
+            value: ${POSTGRESQL_SHARED_BUFFERS}
+          image: ' '
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 5432
+            timeoutSeconds: 1
+          name: postgresql
+          ports:
+          - containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - psql -h 127.0.0.1 -U ${POSTGRESQL_USER} -q -d ${POSTGRESQL_DATABASE}
+                -c 'SELECT 1'
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: ${MEMORY_POSTGRESQL_LIMIT}
+          volumeMounts:
+          - mountPath: /var/lib/pgsql/data
+            name: ${DATABASE_SERVICE_NAME}-data
+        volumes:
+        - name: ${DATABASE_SERVICE_NAME}-data
+          persistentVolumeClaim:
+            claimName: ${DATABASE_SERVICE_NAME}
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - postgresql
+        from:
+          kind: ImageStreamTag
+          name: postgresql:9.5
+          namespace: openshift
+      type: ImageChange
+    - type: ConfigChange
+parameters:
+- description: 分配到项目内定义的所有前端对象的名称。
+  displayName: 名称
+  name: NAME
+  required: true
+  value: musicstore
+- description: .NET Core 容器可以使用的最大内存数。
+  displayName: 内存限制
+  name: MEMORY_LIMIT
+  required: true
+  value: 512Mi
+- description: PostgreSQL 容器可以使用的最大内存数
+  displayName: 内存限制 (PostgreSQL)
+  name: MEMORY_POSTGRESQL_LIMIT
+  required: true
+  value: 512Mi
+- description: 数据卷的容量，例如 512Mi, 2Gi。
+  displayName: 数据卷容量
+  name: VOLUME_CAPACITY
+  required: true
+  value: 1Gi
+- description: 构建代码要用的 Image Stream 的 tag。
+  displayName: .NET builder
+  name: DOTNET_IMAGE_STREAM_TAG
+  required: true
+  value: dotnet:2.0
+- description: .NET builder ImageStream 所在的 Namespace。
+  displayName: Namespace
+  name: NAMESPACE
+  required: true
+  value: openshift
+- description: 你的应用源代码的仓库地址（git）
+  displayName: 代码仓库地址（git）
+  name: SOURCE_REPOSITORY_URL
+  required: true
+  value: https://github.com/redhat-developer/s2i-aspnet-musicstore-ex.git
+- description: 代码分支名称，标签等。
+  displayName: Git 引用
+  name: SOURCE_REPOSITORY_REF
+  value: rel/2.0-example
+- description: 项目内的相对文件路径。
+  displayName: 内容目录
+  name: CONTEXT_DIR
+- description: 设置项目文件（比如：csproj）或者包含一个单独项目文件的目录。
+  displayName: Startup Project
+  name: DOTNET_STARTUP_PROJECT
+  value: samples/MusicStore
+- description: 设置 assembly 名字，当项目文件中覆盖了这个名字。
+  displayName: Startup Assembly
+  name: DOTNET_ASSEMBLY_NAME
+- description: 设置需要发布的 npm 工具列表，用空格分开。
+  displayName: Npm 工具列表
+  name: DOTNET_NPM_TOOLS
+- description: 在发布前设置运行 test 项目列表，用空格分开。
+  displayName: 测试项目列表
+  name: DOTNET_TEST_PROJECTS
+- description: 设置配置 (Release/Debug)。
+  displayName: 配置
+  name: DOTNET_CONFIGURATION
+  value: Release
+- description: 设置覆盖 NuGet.config 源码。
+  displayName: NuGet 包源码
+  name: DOTNET_RESTORE_SOURCES
+- description: 对外公布的主机名，路由到 .Net Core 服务，如果留空将设置为默认值。
+  displayName: 应用主机名
+  name: APPLICATION_DOMAIN
+- description: 配置使用 Github webhook 的秘钥
+  displayName: GitHub Webhook 秘钥
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GITHUB_WEBHOOK_SECRET
+- displayName: 数据库服务名称
+  name: DATABASE_SERVICE_NAME
+  required: true
+  value: postgresql
+- displayName: 数据库用户名
+  from: user[A-Z0-9]{3}
+  generate: expression
+  name: DATABASE_USER
+- displayName: 数据库密码
+  from: '[a-zA-Z0-9]{8}'
+  generate: expression
+  name: DATABASE_PASSWORD
+- displayName: 数据库名
+  name: DATABASE_NAME
+  required: true
+  value: musicstore
+- displayName: 数据库最大连接数
+  name: POSTGRESQL_MAX_CONNECTIONS
+  value: "100"
+- displayName: Shared Buffer 总量
+  name: POSTGRESQL_SHARED_BUFFERS
+  value: 12MB
+- description: 创建 PVC 的 Storageclass。
+  displayName: Storageclass 名称
+  name: STORAGECLASS_NAME
+  value: gluster-dyn-customer

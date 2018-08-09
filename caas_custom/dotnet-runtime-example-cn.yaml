@@ -1,0 +1,260 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  annotations:
+    description: .NET Core Runtime 应用示例
+    iconClass: icon-dotnet
+    openshift.io/display-name: .NET Core Runtime 示例
+    tags: quickstart,dotnet,.net
+    template.openshift.io/documentation-url: https://github.com/redhat-developer/s2i-dotnetcore
+    template.openshift.io/provider-display-name: Red Hat, Inc.
+    template.openshift.io/support-url: https://access.redhat.com
+  creationTimestamp: 2017-12-14T05:13:01Z
+  name: dotnet-runtime-example-cn
+  namespace: openshift
+  resourceVersion: "36690345"
+  selfLink: /apis/template.openshift.io/v1/namespaces/openshift/templates/dotnet-runtime-example-cn
+  uid: 74aff216-e08d-11e7-af1d-005056aae8a2
+objects:
+- apiVersion: v1
+  kind: Route
+  metadata:
+    name: ${NAME}
+  spec:
+    host: ${APPLICATION_DOMAIN}
+    to:
+      kind: Service
+      name: ${NAME}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: 公开和负载均衡应用容器组
+    name: ${NAME}
+  spec:
+    ports:
+    - name: web
+      port: 8080
+      targetPort: 8080
+    selector:
+      name: ${NAME}
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      description: 跟踪应用镜像的变化
+    name: ${NAME}
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      description: 跟踪应用构建镜像的变化
+    name: ${NAME}-build
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: 定义如何构建应用
+    name: ${NAME}-build
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${NAME}-build:latest
+    source:
+      contextDir: ${CONTEXT_DIR}
+      git:
+        ref: ${SOURCE_REPOSITORY_REF}
+        uri: ${SOURCE_REPOSITORY_URL}
+      type: Git
+    strategy:
+      sourceStrategy:
+        env:
+        - name: DOTNET_STARTUP_PROJECT
+          value: ${DOTNET_STARTUP_PROJECT}
+        - name: DOTNET_ASSEMBLY_NAME
+          value: ${DOTNET_ASSEMBLY_NAME}
+        - name: DOTNET_NPM_TOOLS
+          value: ${DOTNET_NPM_TOOLS}
+        - name: DOTNET_TEST_PROJECTS
+          value: ${DOTNET_TEST_PROJECTS}
+        - name: DOTNET_CONFIGURATION
+          value: ${DOTNET_CONFIGURATION}
+        - name: DOTNET_RESTORE_SOURCES
+          value: ${DOTNET_RESTORE_SOURCES}
+        - name: DOTNET_PACK
+          value: "true"
+        from:
+          kind: ImageStreamTag
+          name: ${DOTNET_BUILD_IMAGE_STREAM_TAG}
+          namespace: ${NAMESPACE}
+      type: Source
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - github:
+        secret: ${GITHUB_WEBHOOK_SECRET}
+      type: GitHub
+    - generic:
+        secret: ${GENERIC_WEBHOOK_SECRET}
+      type: Generic
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: 定义如何从源码构建镜像链接到 runtime 镜像
+    name: ${NAME}-runtime
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${NAME}:latest
+    source:
+      dockerfile: |-
+        FROM ${DOTNET_RUNTIME_IMAGE_STREAM_TAG}
+        ADD app.tar.gz .
+      images:
+      - from:
+          kind: ImageStreamTag
+          name: ${NAME}-build:latest
+        paths:
+        - destinationDir: .
+          sourcePath: /opt/app-root/app.tar.gz
+    strategy:
+      dockerStrategy:
+        from:
+          kind: ImageStreamTag
+          name: ${DOTNET_RUNTIME_IMAGE_STREAM_TAG}
+          namespace: ${NAMESPACE}
+      type: Docker
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - imageChange:
+        from:
+          kind: ImageStreamTag
+          name: ${NAME}-build:latest
+      type: ImageChange
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      description: 定义如何部署应用服务
+    name: ${NAME}-runtime
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}
+    strategy:
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          name: ${NAME}
+        name: ${NAME}
+      spec:
+        containers:
+        - env: []
+          image: ' '
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 40
+            timeoutSeconds: 15
+          name: dotnet-runtime-app
+          ports:
+          - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 10
+            timeoutSeconds: 30
+          resources:
+            limits:
+              memory: ${MEMORY_LIMIT}
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - dotnet-runtime-app
+        from:
+          kind: ImageStreamTag
+          name: ${NAME}:latest
+      type: ImageChange
+    - type: ConfigChange
+parameters:
+- description: 分配到项目内定义的所有前端对象的名称。
+  displayName: 名称
+  name: NAME
+  required: true
+  value: dotnet-runtime-example-cn
+- description: 容器可以使用的最大内存数。
+  displayName: 内存限制
+  name: MEMORY_LIMIT
+  required: true
+  value: 512Mi
+- description: 运行应用要用到的镜像的 image stream 的 tag。
+  displayName: .NET Runtime Imagestream Tag
+  name: DOTNET_RUNTIME_IMAGE_STREAM_TAG
+  required: true
+  value: dotnet-runtime:2.0
+- description: 构建应用的 Image Stream 的 tag。
+  displayName: .NET builder
+  name: DOTNET_BUILD_IMAGE_STREAM_TAG
+  required: true
+  value: dotnet:2.0
+- description: ImageStream所在的 Namepspace。
+  displayName: Namespace
+  name: NAMESPACE
+  required: true
+  value: openshift
+- description: 对外公布的主机名，路由到 .Net Core 服务，如果留空将设置为默认值。
+  displayName: 应用主机名
+  name: APPLICATION_DOMAIN
+- description: 你的应用源代码的仓库地址（git）。
+  displayName: 代码仓库地址（git）
+  name: SOURCE_REPOSITORY_URL
+  required: true
+  value: https://github.com/redhat-developer/s2i-dotnetcore-ex.git
+- description: 代码分支名称，标签等。
+  displayName: Git 引用
+  name: SOURCE_REPOSITORY_REF
+  value: dotnetcore-2.0
+- description: 项目内的相对文件路径。
+  displayName: 内容目录
+  name: CONTEXT_DIR
+- description: 配置使用 Github webhook 的秘钥。
+  displayName: GitHub Webhook 秘钥
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GITHUB_WEBHOOK_SECRET
+- description: 配置使用通用 webhook 的秘钥。
+  displayName: 通用 Webhook 秘钥
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  name: GENERIC_WEBHOOK_SECRET
+- description: 设置为包含启动项目的目录
+  displayName: 启动项目
+  name: DOTNET_STARTUP_PROJECT
+  value: app
+- description: 设置 assembly 名字，当项目文件中覆盖了这个名字。
+  displayName: Startup Assembly
+  name: DOTNET_ASSEMBLY_NAME
+- description: 设置需要发布的 npm 工具列表，用空格分开。
+  displayName: Npm 工具列表
+  name: DOTNET_NPM_TOOLS
+  value: bower gulp
+- description: 在发布前设置运行 test 项目列表，用空格分开。
+  displayName: 测试项目列表
+  name: DOTNET_TEST_PROJECTS
+- description: 设置配置 (Release/Debug).
+  displayName: 配置
+  name: DOTNET_CONFIGURATION
+  value: Release
+- description: 设置覆盖 NuGet.config 源码。
+  displayName: NuGet 包源码
+  name: DOTNET_RESTORE_SOURCES
